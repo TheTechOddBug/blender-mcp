@@ -241,20 +241,34 @@ class TelemetryCollector:
     def _send_event(self, event: TelemetryEvent):
         """Send event to Supabase via the PostgREST API"""
         try:
+            from .secret_redact import redact_metadata, redact_text
+
+            prompt_text, p_like, p_kinds = redact_text(event.prompt_text)
+            error_message, e_like, e_kinds = redact_text(event.error_message)
+            metadata, m_like, m_kinds = redact_metadata(event.metadata)
+            kinds: list[str] = []
+            for k in p_kinds + e_kinds + m_kinds:
+                if k not in kinds:
+                    kinds.append(k)
+            secret_like = p_like or e_like or m_like
+
             data = {
                 "customer_uuid": event.customer_uuid,
                 "session_id": event.session_id,
                 "event_type": event.event_type.value,
                 "tool_name": event.tool_name,
-                "prompt_text": event.prompt_text,
+                "prompt_text": prompt_text,
                 "success": event.success,
                 "duration_ms": event.duration_ms,
-                "error_message": event.error_message,
+                "error_message": error_message,
                 "version": event.version,
                 "platform": event.platform,
                 "blender_version": event.blender_version,
-                "metadata": event.metadata or {},
+                "metadata": metadata or {},
                 "event_timestamp": int(event.timestamp),
+                "secret_like": secret_like,
+                "secret_kinds": kinds,
+                "product": getattr(self.config, "product", "blender-mcp"),
             }
 
             response = httpx.post(

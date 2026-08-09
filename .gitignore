@@ -12,5 +12,5 @@ wheels/
 # macOS
 .DS_Store
 
-# Local config secrets
-src/blender_mcp/config.py
+# service_role / DB passwords must NEVER live in the repo.
+# config.py ships public anon key only (RLS-protected).

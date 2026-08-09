@@ -52,21 +52,42 @@ class BlenderMCPServer:
         self.server_thread = None
 
     def _get_config_value(self, scene_attr, pref_attr=None, env_var=None):
-        """Read config in order: addon preferences -> scene -> env var."""
+        """Read config: OS vault -> addon preferences -> env (not scene — avoids .blend leaks)."""
+        # 1) OS-backed encrypted vault (never written into .blend)
+        for key in (pref_attr, env_var, scene_attr):
+            if not key:
+                continue
+            try:
+                from blender_mcp.secret_store import get_secret
+
+                vault_value = get_secret(key)
+                if vault_value:
+                    return vault_value
+            except Exception:
+                break
+
         prefs = get_blendermcp_addon_preferences()
         if prefs and pref_attr:
             pref_value = getattr(prefs, pref_attr, "")
             if pref_value:
-                return pref_value
+                # Migrate plaintext pref into vault when possible
+                try:
+                    from blender_mcp.secret_store import set_secret
 
-        scene_value = getattr(bpy.context.scene, scene_attr, "")
-        if scene_value:
-            return scene_value
+                    set_secret(pref_attr, pref_value)
+                except Exception:
+                    pass
+                return pref_value
 
         if env_var:
             env_value = os.getenv(env_var, "")
             if env_value:
                 return env_value
+
+        # Scene props are legacy only (risk: secrets inside .blend files)
+        scene_value = getattr(bpy.context.scene, scene_attr, "")
+        if scene_value:
+            return scene_value
         return ""
 
     def _get_hyper3d_api_key(self):
@@ -1238,18 +1259,15 @@ class BlenderMCPServer:
             return {"error": f"Failed to apply texture: {str(e)}"}
 
     def get_telemetry_consent(self):
-        """Get the current telemetry consent status"""
+        """Get the current telemetry consent status (default False / opt-in)."""
         try:
-            # Get addon preferences - use the module name
             addon_prefs = bpy.context.preferences.addons.get(__name__)
             if addon_prefs:
-                consent = addon_prefs.preferences.telemetry_consent
+                consent = bool(addon_prefs.preferences.telemetry_consent)
             else:
-                # Fallback to default if preferences not available
-                consent = True
+                consent = False
         except (AttributeError, KeyError):
-            # Fallback to default if preferences not available
-            consent = True
+            consent = False
         return {"consent": consent}
 
     def get_polyhaven_status(self):
@@ -2522,12 +2540,11 @@ class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
         # Info text
         box.separator()
         if self.telemetry_consent:
-            box.label(text="With consent: We collect anonymized prompts, code, and screenshots.", icon='INFO')
+            box.label(text="With consent: prompts/code/screenshots after secret redaction.", icon='INFO')
         else:
-            box.label(text="Without consent: We only collect minimal anonymous usage data", icon='INFO')
-            box.label(text="(tool names, success/failure, duration - no prompts or code).", icon='BLANK1')
+            box.label(text="Without consent: minimal usage only (tool name, success, duration).", icon='INFO')
         box.separator()
-        box.label(text="All data is fully anonymized. You can change this anytime.", icon='CHECKMARK')
+        box.label(text="API keys stay local (encrypted vault). Raw keys are never uploaded.", icon='LOCKED')
         
         # Terms and Conditions link
         box.separator()
